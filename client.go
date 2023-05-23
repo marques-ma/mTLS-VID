@@ -29,7 +29,7 @@ type LSVID struct {
 	Version              string
 	IssuerID             string
 	SubjectID            string
-	SubjectPublicKey     crypto.PublicKey
+	SubjectPublicKey     []byte
 	SubjectKeyExpiration time.Time
 	Signature            []byte
 }
@@ -113,19 +113,24 @@ func main() {
 func GenerateCertificate(clientLSVID string, privateKey crypto.PrivateKey) ([]byte, error) {
 
 	// Decode the base64-encoded LSVID
-	decLSVID, err := base64.StdEncoding.DecodeString(clientLSVID)
-	if err != nil {
-		log.Fatalf("Error decoding base64 LSVID: %s", err)
-	}
-
-	// Parse the JSON string into an LSVID struct
-	var lsvid LSVID
-	err = json.Unmarshal(decLSVID, &lsvid)
+	lsvid, err := stringToLSVID(clientLSVID)
 	if err != nil {
 		log.Fatalf("Error parsing LSVID JSON: %s", err)
 	}
+
+	// Parse the public key from the LSVID bytes
+	publicKey, err := x509.ParsePKIXPublicKey(lsvid.SubjectPublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("Error parsing public key: %v", err)
+	}
+
+	// Type assert the parsed public key to get the ECDSA public key
+	ecdsaPublicKey, ok := publicKey.(*ecdsa.PublicKey)
+	if !ok {
+		return nil, fmt.Errorf("Invalid public key type")
+	}
 	
-	// Retrieve ECDSA private key
+	// assign ECDSA private key
 	ecdsaPrivateKey, ok := privateKey.(*ecdsa.PrivateKey)
 	if !ok {
 		return nil, fmt.Errorf("invalid private key type")
@@ -147,7 +152,7 @@ func GenerateCertificate(clientLSVID string, privateKey crypto.PrivateKey) ([]by
 		NotBefore:				time.Now(),
 		NotAfter:				lsvid.SubjectKeyExpiration,
 		BasicConstraintsValid:	true,
-		PublicKey:				ecdsaPrivateKey.Public(),
+		PublicKey:				ecdsaPublicKey,
 		DNSNames:				[]string{"localhost"},
 	}
 
@@ -202,13 +207,19 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("Invalid private key type")
 	}
+
+	// Convert the ECDSA public key to bytes
+	publicKeyBytes, err := x509.MarshalPKIXPublicKey(&ecdsaPrivateKey.PublicKey)
+	if err != nil {
+		return "", fmt.Errorf("Error marshaling public key: %v", err)
+	}
 	
 	// Create the LSVID payload
 	reqLSVID := LSVID{
 		Version:              "1",
 		IssuerID:             "spiffe://example.org/",
 		SubjectID:            id,
-		SubjectPublicKey:     ecdsaPrivateKey.Public(),
+		SubjectPublicKey:     publicKeyBytes,
 		SubjectKeyExpiration: time.Now().Add(24 * time.Hour).UTC(),
 	}
 
@@ -227,15 +238,41 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	
 	// Add signature to req LSVID
 	reqLSVID.Signature = signatureBytes
-	
-	// Convert the LSVID struct to JSON
-	jsonData, err := json.Marshal(reqLSVID)
+
+	// Convert LSVID to string
+	encLSVID, err:= reqLSVID.toString()
 	if err != nil {
 		return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
 	}
 
-	// Encode the JSON data to base64
-	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
-
 	return encLSVID, nil
+}
+
+func (lsvid *LSVID) toString() (string, error) {
+		// Convert the LSVID struct to JSON
+		jsonData, err := json.Marshal(lsvid)
+		if err != nil {
+			return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
+		}
+	
+		// Encode the JSON data to base64
+		encLSVID := base64.StdEncoding.EncodeToString(jsonData)
+		return encLSVID, nil
+}
+
+func stringToLSVID(encLSVID string) (LSVID, error) {
+	
+	// Decode the base64-encoded LSVID
+	decLSVID, err := base64.StdEncoding.DecodeString(encLSVID)
+	if err != nil {
+		log.Fatalf("Error decoding base64 LSVID: %s", err)
+	}
+
+	// Parse the JSON string into an LSVID struct
+	var lsvid LSVID
+	err = json.Unmarshal(decLSVID, &lsvid)
+	if err != nil {
+		log.Fatalf("Error parsing LSVID JSON: %s", err)
+	}
+	return lsvid, nil
 }
