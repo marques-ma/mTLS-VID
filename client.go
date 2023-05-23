@@ -48,10 +48,13 @@ func main() {
 
 	// Create the LSVID to a given ID/Privatekey
 	clientID := "spiffe://example.org/client"
+	log.Printf("Client ID: %s\n", clientID)
+
 	clientLSVID, err := createLSVID(clientID, privateKey)
 	if err != nil {
 		log.Fatalf("Error generating LSVID: %v", err)
 	}
+	log.Printf("Client LSVID: %s", clientLSVID)
 
 	// Generate a self-signed X.509 certificate based on the LSVID data
 	certBytes, err := GenerateCertificate(clientLSVID, privateKey)
@@ -192,8 +195,8 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 		return "", fmt.Errorf("Invalid private key type")
 	}
 	
-	// Create the client LSVID payload
-	clientLSVID := LSVID{
+	// Create the LSVID payload
+	reqLSVID := LSVID{
 		Version:              "1",
 		IssuerID:             "spiffe://example.org/",
 		SubjectID:            id,
@@ -202,7 +205,7 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	}
 
 	// Sign the LSVID payload
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", clientLSVID)))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", reqLSVID)))
 	r, s, err := ecdsa.Sign(rand.Reader, ecdsaPrivateKey, hash[:])
 	if err != nil {
 		return "", fmt.Errorf("Error signing LSVID payload: %s\n", err)
@@ -214,18 +217,17 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 		return "", fmt.Errorf("Error encoding ECDSA signature: %s\n", err)
 	}
 	
-	// Add signature to client LSVID
-	clientLSVID.Signature = signatureBytes
+	// Add signature to req LSVID
+	reqLSVID.Signature = signatureBytes
 	
 	// Convert the LSVID struct to JSON
-	jsonData, err := json.Marshal(clientLSVID)
+	jsonData, err := json.Marshal(reqLSVID)
 	if err != nil {
 		return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
 	}
 
 	// Encode the JSON data to base64
 	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
-	log.Printf("Client LSVID: %s", encLSVID)
 
 	return encLSVID, nil
 }

@@ -35,54 +35,50 @@ type ecdsaSignature struct {
 	R, S *big.Int
 }
 
-// ServeHTTP handles incoming HTTP requests
-func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
-	client := r.TLS.PeerCertificates[0]
-	log.Println("Received request from client: ", client.Subject.CommonName)
+func main() {
 
-	// Extract the raw client certificate
-	rawCert := r.TLS.PeerCertificates[0].Raw
-
-	// Verify client certificate and LSVID
-	if err := VerifyPeerCertificate([][]byte{rawCert}, r.TLS.VerifiedChains); err != nil {
-		log.Println("Invalid client certificate:", err)
-		http.Error(w, "Invalid client certificate", http.StatusUnauthorized)
-		return
-	}
-	// Verify LSVID of the client
-	if !verifyLSVID(r.Header.Get("LSVID")) {
-		log.Println("Invalid client LSVID")
-		http.Error(w, "Invalid client LSVID", http.StatusUnauthorized)
-		return
-	}
-
-	log.Println("Valid client LSVID")
-
-	ramdomLimit := new(big.Int).Lsh(big.NewInt(1), 64)
-	randomHi, err := rand.Int(rand.Reader, ramdomLimit)
+	// Generate an ECDSA private key for the server
+	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		log.Printf("Failed to generate random number: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		log.Fatalf("Failed to generate private key: %v", err)
 	}
 
-	// Send a message from the server to the client
-	message := "Hello number " + randomHi.String() + " to client " + client.Subject.CommonName
-	_, err = w.Write([]byte(message))
+	// Create the LSVID to a given ID/Privatekey
+	serverID := "spiffe://example.org/server"
+	log.Printf("Server ID: %s\n", serverID)
+	serverLSVID, err := createLSVID(serverID, privateKey)
 	if err != nil {
-		log.Printf("Failed to send message to client: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
+		log.Fatalf("Error generating LSVID: %v", err)
 	}
 
-	log.Printf("Message sent to client: %s \n", message)
+	// Create an HTTP server with LSVID-based mTLS
+	err = ListenAndServeLSVID(":8080", http.HandlerFunc(ServeHTTP), serverLSVID, privateKey)
+	if err != nil {
+		log.Fatalf("Failed to start LSVID-based mTLS server: %v", err)
+	}
 }
 
 // ListenAndServeLSVID listens on the specified address and handles incoming LSVID-based mTLS requests
-func ListenAndServeLSVID(addr string, handler http.Handler, serverLSVID LSVID, privateKey crypto.PrivateKey) error {
+func ListenAndServeLSVID(addr string, handler http.Handler, serverLSVID string, privateKey crypto.PrivateKey) error {
+
+	log.Printf("Server LSVID: %s", serverLSVID)
+
+	// decode the LSVID
+	var decLSVID LSVID
+	tmp, err := base64.StdEncoding.DecodeString(serverLSVID)
+	if err != nil {
+		return fmt.Errorf("Failed to Decode b64 String: %v\n", err)
+	}
+	
+	// Convert the LSVID struct to JSON
+	err = json.Unmarshal([]byte(tmp), &decLSVID)
+	if err != nil {
+		return fmt.Errorf("Failed unmarshal LSVID JSON: %v\n", err)
+	}
+
 	// Generate a self-signed X.509 certificate based on the LSVID data
-	certBytes, err := GenerateCertificate(serverLSVID, privateKey)
+	certBytes, err := GenerateCertificate(decLSVID, privateKey)
 	if err != nil {
 		return fmt.Errorf("failed to generate certificate: %v", err)
 	}
@@ -122,6 +118,51 @@ func ListenAndServeLSVID(addr string, handler http.Handler, serverLSVID LSVID, p
 
 	return nil
 }
+
+// ServeHTTP handles incoming HTTP requests
+func ServeHTTP(w http.ResponseWriter, r *http.Request) {
+
+	client := r.TLS.PeerCertificates[0]
+	log.Println("Received request from client: ", client.Subject.CommonName)
+
+	// Extract the raw client certificate
+	rawCert := r.TLS.PeerCertificates[0].Raw
+
+	// Verify client certificate and LSVID
+	if err := VerifyPeerCertificate([][]byte{rawCert}, r.TLS.VerifiedChains); err != nil {
+		log.Println("Invalid client certificate:", err)
+		http.Error(w, "Invalid client certificate", http.StatusUnauthorized)
+		return
+	}
+	// Verify LSVID of the client
+	if !verifyLSVID(r.Header.Get("LSVID")) {
+		log.Println("Invalid client LSVID")
+		http.Error(w, "Invalid client LSVID", http.StatusUnauthorized)
+		return
+	}
+
+	log.Println("Valid client LSVID")
+
+	ramdomLimit := new(big.Int).Lsh(big.NewInt(1), 64)
+	randomHi, err := rand.Int(rand.Reader, ramdomLimit)
+	if err != nil {
+		log.Printf("Failed to generate random number: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// Send a message from the server to the client
+	message := "Hello number " + randomHi.String() + " to " + client.Subject.CommonName
+	_, err = w.Write([]byte(message))
+	if err != nil {
+		log.Printf("Failed to send message to client: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Message sent to client: %s \n", message)
+}
+
 
 // Helper function to verify LSVID
 func verifyLSVID(lsvid string) bool {
@@ -183,54 +224,6 @@ func GenerateCertificate(lsvid LSVID, privateKey crypto.PrivateKey) ([]byte, err
 	return pemData, nil
 }
 
-func main() {
-	// Generate an ECDSA private key for the server
-	ecdsaPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		log.Fatalf("Failed to generate private key: %v", err)
-	}
-
-	// In the PoC use case scenario, the LSVID will be retrieved from SPIRE-Agent. In this prototype, we create a fake one.
-	serverLSVID := LSVID{
-		Version:              "1",
-		IssuerID:             "spiffe://example.org/",
-		SubjectID:            "spiffe://example.org/server",
-		SubjectPublicKey:     ecdsaPrivateKey.Public(),
-		SubjectKeyExpiration: time.Now().Add(24 * time.Hour).UTC(),
-	}
-	
-	// Sign the LSVID payload
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", serverLSVID)))
-	r, s, err := ecdsa.Sign(rand.Reader, ecdsaPrivateKey, hash[:])
-	if err != nil {
-		log.Fatalf("Error signing LSVID payload: %s\n", err)
-	}
-
-	// Encode the ECDSA signature
-	signatureBytes, err := asn1.Marshal(ecdsaSignature{r, s})
-	if err != nil {
-		log.Fatalf("Error encoding ECDSA signature: %s\n", err)
-	}
-	
-	// Add signature to client LSVID
-	serverLSVID.Signature = signatureBytes
-	
-	// Convert the LSVID struct to JSON
-	jsonData, err := json.Marshal(serverLSVID)
-	if err != nil {
-		log.Fatalf("Failed to marshal LSVID to JSON: %v\n", err)
-	}
-
-	// Encode the JSON data to base64
-	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
-	log.Printf("Server LSVID: %s", encLSVID)
-
-	// Create an HTTP server with LSVID-based mTLS
-	err = ListenAndServeLSVID(":8080", http.HandlerFunc(ServeHTTP), serverLSVID, ecdsaPrivateKey)
-	if err != nil {
-		log.Fatalf("Failed to start LSVID-based mTLS server: %v", err)
-	}
-}
 
 // VerifyPeerCertificate is a custom callback function for verifying client certificates
 func VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -263,4 +256,48 @@ func VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x509.Certifica
 	log.Println("TODO: ADD if clientCert.PublicKey == LSVID.PublicKey to validate the link")
 
 	return nil
+}
+
+func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
+	// Type assert privateKey to get the ECDSA private key
+	ecdsaPrivateKey, ok := privateKey.(*ecdsa.PrivateKey)
+	if !ok {
+		return "", fmt.Errorf("Invalid private key type")
+	}
+	
+	// Create the LSVID payload
+	reqLSVID := LSVID{
+		Version:              "1",
+		IssuerID:             "spiffe://example.org/",
+		SubjectID:            id,
+		SubjectPublicKey:     ecdsaPrivateKey.Public(),
+		SubjectKeyExpiration: time.Now().Add(24 * time.Hour).UTC(),
+	}
+
+	// Sign the LSVID payload
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", reqLSVID)))
+	r, s, err := ecdsa.Sign(rand.Reader, ecdsaPrivateKey, hash[:])
+	if err != nil {
+		return "", fmt.Errorf("Error signing LSVID payload: %s\n", err)
+	}
+
+	// Encode the ECDSA signature
+	signatureBytes, err := asn1.Marshal(ecdsaSignature{r, s})
+	if err != nil {
+		return "", fmt.Errorf("Error encoding ECDSA signature: %s\n", err)
+	}
+	
+	// Add signature to req LSVID
+	reqLSVID.Signature = signatureBytes
+	
+	// Convert the LSVID struct to JSON
+	jsonData, err := json.Marshal(reqLSVID)
+	if err != nil {
+		return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
+	}
+
+	// Encode the JSON data to base64
+	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
+
+	return encLSVID, nil
 }
