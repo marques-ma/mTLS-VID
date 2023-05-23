@@ -193,7 +193,7 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	}
 	
 	// Create the client LSVID payload
-	tmpLSVID := LSVID{
+	clientLSVID := LSVID{
 		Version:              "1",
 		IssuerID:             "spiffe://example.org/",
 		SubjectID:            id,
@@ -202,7 +202,7 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	}
 
 	// Sign the LSVID payload
-	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", tmpLSVID)))
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", clientLSVID)))
 	r, s, err := ecdsa.Sign(rand.Reader, ecdsaPrivateKey, hash[:])
 	if err != nil {
 		return "", fmt.Errorf("Error signing LSVID payload: %s\n", err)
@@ -215,17 +215,17 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	}
 	
 	// Add signature to client LSVID
-	tmpLSVID.Signature = signatureBytes
+	clientLSVID.Signature = signatureBytes
 	
 	// Convert the LSVID struct to JSON
-	jsonData, err := json.Marshal(tmpLSVID)
+	jsonData, err := json.Marshal(clientLSVID)
 	if err != nil {
 		return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
 	}
 
 	// Encode the JSON data to base64
 	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
-	log.Printf("Encoded LSVID: %s", encLSVID)
+	log.Printf("Client LSVID: %s", encLSVID)
 
 	return encLSVID, nil
 }

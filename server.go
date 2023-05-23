@@ -15,6 +15,9 @@ import (
 	"net/http"
 	"time"
 	"crypto/sha256"
+	"encoding/asn1"
+	"encoding/base64"
+	"encoding/json"
 )
 
 // LSVID structure representing the LSVID identity
@@ -25,6 +28,11 @@ type LSVID struct {
 	SubjectPublicKey     crypto.PublicKey
 	SubjectKeyExpiration time.Time
 	Signature            []byte
+}
+
+
+type ecdsaSignature struct {
+	R, S *big.Int
 }
 
 // ServeHTTP handles incoming HTTP requests
@@ -125,8 +133,9 @@ func verifyLSVID(lsvid string) bool {
 }
 
 // GenerateCertificate generates a self-signed X.509 certificate based on the LSVID data
+// TODO: Add swith algorithm
 func GenerateCertificate(lsvid LSVID, privateKey crypto.PrivateKey) ([]byte, error) {
-	// Generate ECDSA private key
+	// Assign private key to ECDSA
 	ecdsaPrivateKey, ok := privateKey.(*ecdsa.PrivateKey)
 	if !ok {
 		return nil, fmt.Errorf("invalid private key type")
@@ -146,7 +155,7 @@ func GenerateCertificate(lsvid LSVID, privateKey crypto.PrivateKey) ([]byte, err
 	// Set the public key in the certificate template
 	template.PublicKey = ecdsaPrivateKey.Public()
 
-	// Add the "localhost" hostname to the certificate's Subject Alternative Name (SAN)
+	// Add the certificate's Subject Alternative Name (SAN)
 	template.DNSNames = []string{"localhost"}
 
 	// Generate a random serial number for the certificate
@@ -157,7 +166,7 @@ func GenerateCertificate(lsvid LSVID, privateKey crypto.PrivateKey) ([]byte, err
 	}
 	template.SerialNumber = serialNumber
 
-	// Sign the certificate with the private key to generate the final certificate
+	// Sign the certificate with the private key
 	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, template.PublicKey, ecdsaPrivateKey)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create certificate: %v", err)
@@ -176,23 +185,48 @@ func GenerateCertificate(lsvid LSVID, privateKey crypto.PrivateKey) ([]byte, err
 
 func main() {
 	// Generate an ECDSA private key for the server
-	privateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecdsaPrivateKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		log.Fatalf("Failed to generate private key: %v", err)
 	}
 
-	// Create the server LSVID
+	// In the PoC use case scenario, the LSVID will be retrieved from SPIRE-Agent. In this prototype, we create a fake one.
 	serverLSVID := LSVID{
 		Version:              "1",
 		IssuerID:             "spiffe://example.org/",
 		SubjectID:            "spiffe://example.org/server",
-		SubjectPublicKey:     privateKey.Public(),
+		SubjectPublicKey:     ecdsaPrivateKey.Public(),
 		SubjectKeyExpiration: time.Now().Add(24 * time.Hour).UTC(),
-		Signature:            nil,
+	}
+	
+	// Sign the LSVID payload
+	hash := sha256.Sum256([]byte(fmt.Sprintf("%s", serverLSVID)))
+	r, s, err := ecdsa.Sign(rand.Reader, ecdsaPrivateKey, hash[:])
+	if err != nil {
+		log.Fatalf("Error signing LSVID payload: %s\n", err)
 	}
 
+	// Encode the ECDSA signature
+	signatureBytes, err := asn1.Marshal(ecdsaSignature{r, s})
+	if err != nil {
+		log.Fatalf("Error encoding ECDSA signature: %s\n", err)
+	}
+	
+	// Add signature to client LSVID
+	serverLSVID.Signature = signatureBytes
+	
+	// Convert the LSVID struct to JSON
+	jsonData, err := json.Marshal(serverLSVID)
+	if err != nil {
+		log.Fatalf("Failed to marshal LSVID to JSON: %v\n", err)
+	}
+
+	// Encode the JSON data to base64
+	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
+	log.Printf("Server LSVID: %s", encLSVID)
+
 	// Create an HTTP server with LSVID-based mTLS
-	err = ListenAndServeLSVID(":8080", http.HandlerFunc(ServeHTTP), serverLSVID, privateKey)
+	err = ListenAndServeLSVID(":8080", http.HandlerFunc(ServeHTTP), serverLSVID, ecdsaPrivateKey)
 	if err != nil {
 		log.Fatalf("Failed to start LSVID-based mTLS server: %v", err)
 	}
