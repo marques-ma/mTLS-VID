@@ -168,6 +168,7 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func verifyLSVID(lsvid string) bool {
 	// TODO: Implement LSVID verification logic
 	// ...
+	log.Printf("Received client LSVID: %s\n", lsvid)
 
 	// Placeholder LSVID verification
 	return true

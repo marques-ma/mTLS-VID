@@ -84,8 +84,16 @@ func main() {
 	// Create an HTTP client with the custom transport
 	client := &http.Client{Transport: transport}
 
-	// Send an HTTP request to the server
-	resp, err := client.Get("https://localhost:8080")
+	// Add LSVID to the request header
+	req, err := http.NewRequest("GET", "https://localhost:8080", nil)
+	if err != nil {
+		log.Fatalf("Failed to create request: %v", err)
+	}
+
+	req.Header.Set("LSVID", clientLSVID)
+	
+	// Send the HTTP request
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Fatalf("Failed to send request: %v", err)
 	}
