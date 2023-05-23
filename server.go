@@ -56,7 +56,6 @@ func main() {
 
 	// Create a dummy server LSVID
 	serverID := "spiffe://example.org/server"
-	log.Printf("Server ID: %s\n", serverID)
 	serverLSVID, err := createLSVID(serverID, privateKey)
 	if err != nil {
 		log.Fatalf("Error generating LSVID: %v", err)
@@ -164,9 +163,8 @@ func ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("Message sent to client: %s \n", message)
+	log.Printf("Message sent to client: %s \n\n", message)
 }
-
 
 // Helper function to verify LSVID
 func verifyLSVID(lsvid string) bool {
@@ -241,30 +239,30 @@ func GenerateCertificate(clientLSVID string, privateKey crypto.PrivateKey) ([]by
 	return pemData, nil
 }
 
-
 // VerifyPeerCertificate is a custom callback function for verifying client certificates
 func VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 	if len(rawCerts) == 0 {
 		return fmt.Errorf("no client certificate provided")
 	}
 
-	clientCert, err := x509.ParseCertificate(rawCerts[0])
+	cert, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
 		return fmt.Errorf("failed to parse client certificate: %v", err)
 	}
 
 	// Compute the hash of the certificate's raw TBSCertificate
-	tbs := clientCert.RawTBSCertificate
+	tbs := cert.RawTBSCertificate
 	hash := sha256.Sum256(tbs)
 
 	// Verify the cert signature using the cert public key
-	if !ecdsa.VerifyASN1(clientCert.PublicKey.(*ecdsa.PublicKey), hash[:], clientCert.Signature) {
+	if !ecdsa.VerifyASN1(cert.PublicKey.(*ecdsa.PublicKey), hash[:], cert.Signature) {
 		return fmt.Errorf("Invalid certificate signature: %v", err)
 	}
-	log.Println("Client certificate signature successfully validated!")
+	log.Printf("%s certificate signature successfully validated!\n", cert.Subject)
 
 	return nil
 }
+
 
 func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	// Type assert privateKey to get the ECDSA private key

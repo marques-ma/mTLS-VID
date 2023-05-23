@@ -38,6 +38,18 @@ type ecdsaSignature struct {
 	R, S *big.Int
 }
 
+func (lsvid *LSVID) toString() (string, error) {
+	// Convert the LSVID struct to JSON
+	jsonData, err := json.Marshal(lsvid)
+	if err != nil {
+		return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
+	}
+
+	// Encode the JSON data to base64
+	encLSVID := base64.StdEncoding.EncodeToString(jsonData)
+	return encLSVID, nil
+}
+
 func main() {
 
 	// Generate an ECDSA private key for the client
@@ -179,15 +191,20 @@ func VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x509.Certifica
 		return fmt.Errorf("no client certificate provided")
 	}
 
-	serverCert, err := x509.ParseCertificate(rawCerts[0])
+	cert, err := x509.ParseCertificate(rawCerts[0])
 	if err != nil {
-		return fmt.Errorf("failed to parse server certificate: %v", err)
+		return fmt.Errorf("failed to parse client certificate: %v", err)
 	}
 
-	// Verify LSVID of the server
-	if !verifyLSVID(serverCert.Subject.CommonName) {
-		return fmt.Errorf("invalid server LSVID")
+	// Compute the hash of the certificate's raw TBSCertificate
+	tbs := cert.RawTBSCertificate
+	hash := sha256.Sum256(tbs)
+
+	// Verify the cert signature using the cert public key
+	if !ecdsa.VerifyASN1(cert.PublicKey.(*ecdsa.PublicKey), hash[:], cert.Signature) {
+		return fmt.Errorf("Invalid certificate signature: %v", err)
 	}
+	log.Printf("%s certificate signature successfully validated!\n", cert.Subject)
 
 	return nil
 }
@@ -248,17 +265,6 @@ func createLSVID(id string, privateKey crypto.PrivateKey) (string, error) {
 	return encLSVID, nil
 }
 
-func (lsvid *LSVID) toString() (string, error) {
-		// Convert the LSVID struct to JSON
-		jsonData, err := json.Marshal(lsvid)
-		if err != nil {
-			return "", fmt.Errorf("Failed to marshal LSVID to JSON: %v\n", err)
-		}
-	
-		// Encode the JSON data to base64
-		encLSVID := base64.StdEncoding.EncodeToString(jsonData)
-		return encLSVID, nil
-}
 
 func stringToLSVID(encLSVID string) (LSVID, error) {
 	
